@@ -1,7 +1,10 @@
-import { redirect } from "next/navigation";
-
-export const instant = false;
+import DashboardLayout from "@/components/DashboardLayout";
+import DashboardView from "@/components/DashboardView";
 
 export default function Home() {
-  redirect("/dashboard");
+  return (
+    <DashboardLayout>
+      <DashboardView />
+    </DashboardLayout>
+  );
 }
