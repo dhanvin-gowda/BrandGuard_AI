@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getBrandPolicies, saveBrandPolicy } from '@/lib/policyStore';
 import { verifyServerSession, isAuthError } from '@/lib/authServer';
 import { BrandPolicy } from '@/types/brandguard';
+import { markDynamic } from '@/lib/dynamicRoute';
 
 export async function GET() {
+  await markDynamic();
   try {
     const policies = await getBrandPolicies();
     return NextResponse.json({ policies });

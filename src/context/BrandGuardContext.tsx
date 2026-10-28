@@ -12,8 +12,6 @@ import {
 } from '@/types/brandguard';
 import {
   DEFAULT_POLICIES,
-  MOCK_THREATS,
-  SAMPLE_PRESETS,
   analyzeBrandContent,
 } from '@/lib/brandSafetyEngine';
 import {
@@ -22,7 +20,7 @@ import {
   INITIAL_AUDIT_EVENTS,
 } from '@/lib/workflowStore';
 import { isSupabaseConfigured, getSupabaseClient } from '@/lib/supabase';
-import { PersistentScanRecord } from '@/lib/scanStore';
+import { PersistentScanRecord, INITIAL_PERSISTENT_SCANS } from '@/lib/scanStore';
 
 interface BrandGuardContextType {
   policies: Record<string, BrandPolicy>;
@@ -36,11 +34,17 @@ interface BrandGuardContextType {
   updateThreatStatus: (id: string, status: ThreatMention['status']) => void;
   addThreat: (threat: ThreatMention) => void;
   scanResult: ScanResult;
+  isScanning: boolean;
+  scanError: string | null;
+  runScan: (text?: string, targetPolicy?: BrandPolicy, options?: { enableAi?: boolean; persist?: boolean }) => Promise<ScanResult>;
+  saveScan: (resultToSave: ScanResult, content: string, policyId?: string) => Promise<string>;
+  resetDemoData: () => void;
   isAuditModalOpen: boolean;
   setIsAuditModalOpen: (open: boolean) => void;
 
   // Persistence & Storage Mode
   storageMode: 'supabase' | 'local_demo';
+  isSupabaseConnected: boolean;
   isLoadingData: boolean;
   dataError: string | null;
   refreshData: () => Promise<void>;
@@ -63,6 +67,7 @@ const STORAGE_KEYS = {
   SUBMISSIONS: 'bg_submissions_v2',
   AUDIT_EVENTS: 'bg_audit_events_v2',
   CURRENT_USER_ROLE: 'bg_user_role_v2',
+  SCANS: 'bg_persistent_scans_v2',
 };
 
 export const BrandGuardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -79,18 +84,47 @@ export const BrandGuardProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   });
 
   const [currentPolicyId, setCurrentPolicyId] = useState<string>('fintech');
-  const [inputText, setInputText] = useState<string>(SAMPLE_PRESETS[0].text);
-  const [threats, setThreats] = useState<ThreatMention[]>(MOCK_THREATS);
+  const [inputText, setInputText] = useState<string>('');
+  const [threats, setThreats] = useState<ThreatMention[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('bg_threats_v2');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch (e) {
+        console.warn('Could not load cached threats:', e);
+      }
+    }
+    return [];
+  });
   const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
-  const [persistentScans, setPersistentScans] = useState<PersistentScanRecord[]>([]);
+  const [persistentScans, setPersistentScans] = useState<PersistentScanRecord[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.SCANS);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch (e) {
+        console.warn('Could not load cached persistent scans:', e);
+      }
+    }
+    return INITIAL_PERSISTENT_SCANS;
+  });
 
   const [submissions, setSubmissions] = useState<ContentSubmission[]>(() => {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem(STORAGE_KEYS.SUBMISSIONS);
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) return parsed;
+        }
       } catch (e) {
         console.warn('Could not load cached submissions:', e);
       }
@@ -102,7 +136,10 @@ export const BrandGuardProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem(STORAGE_KEYS.AUDIT_EVENTS);
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) return parsed;
+        }
       } catch (e) {
         console.warn('Could not load cached audit events:', e);
       }
@@ -254,20 +291,176 @@ export const BrandGuardProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         localStorage.setItem(STORAGE_KEYS.POLICIES, JSON.stringify(policies));
         localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(submissions));
         localStorage.setItem(STORAGE_KEYS.AUDIT_EVENTS, JSON.stringify(auditEvents));
+        localStorage.setItem(STORAGE_KEYS.SCANS, JSON.stringify(persistentScans));
+        localStorage.setItem('bg_threats_v2', JSON.stringify(threats));
       } catch (e) {
         console.warn('Could not save to local storage in demo mode:', e);
       }
     }
-  }, [policies, submissions, auditEvents, storageMode]);
+  }, [policies, submissions, auditEvents, persistentScans, threats, storageMode]);
+
+  const resetDemoData = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.POLICIES);
+        localStorage.removeItem(STORAGE_KEYS.SUBMISSIONS);
+        localStorage.removeItem(STORAGE_KEYS.AUDIT_EVENTS);
+        localStorage.removeItem(STORAGE_KEYS.SCANS);
+        localStorage.removeItem('bg_threats_v2');
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ROLE);
+      } catch (e) {
+        console.warn('Could not clear local storage demo data:', e);
+      }
+    }
+    setPolicies(DEFAULT_POLICIES);
+    setCurrentPolicyId('fintech');
+    setSubmissions(INITIAL_SUBMISSIONS);
+    setAuditEvents(INITIAL_AUDIT_EVENTS);
+    setPersistentScans(INITIAL_PERSISTENT_SCANS);
+    setThreats([]);
+    setCurrentUser(DEMO_USERS.creator);
+  }, []);
 
   const currentPolicy = useMemo(() => {
     return policies[currentPolicyId] || policies.fintech || DEFAULT_POLICIES.fintech;
   }, [policies, currentPolicyId]);
 
-  // Evaluates text against the active policy dynamically
-  const scanResult = useMemo(() => {
+  // API scan result state
+  const [apiScanResult, setApiScanResult] = useState<ScanResult | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  // Synchronously derived scanResult: uses API scan result if matching current input text,
+  // otherwise immediately evaluates deterministic rules without cascading effect renders.
+  const scanResult = useMemo<ScanResult>(() => {
+    if (apiScanResult && apiScanResult.originalText === inputText) {
+      return apiScanResult;
+    }
     return analyzeBrandContent(inputText, currentPolicy);
-  }, [inputText, currentPolicy]);
+  }, [inputText, currentPolicy, apiScanResult]);
+
+  const runScan = useCallback(async (
+    textToScan?: string,
+    targetPolicy?: BrandPolicy,
+    options?: { enableAi?: boolean; persist?: boolean }
+  ): Promise<ScanResult> => {
+    const text = typeof textToScan === 'string' ? textToScan : inputText;
+    const policy = targetPolicy || currentPolicy;
+    const enableAi = options?.enableAi !== false;
+    const shouldPersist = Boolean(options?.persist);
+
+    const baseline = analyzeBrandContent(text, policy);
+    if (!text.trim()) {
+      setApiScanResult(null);
+      return baseline;
+    }
+
+    setIsScanning(true);
+    setScanError(null);
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          text,
+          policy,
+          enableAi,
+          persist: shouldPersist,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `Scan request failed with HTTP ${res.status}`);
+      }
+
+      const data: ScanResult = await res.json();
+      setApiScanResult(data);
+      return data;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('API scan failed, using deterministic sentinel:', msg);
+      setScanError(msg);
+      const fallbackResult: ScanResult = {
+        ...baseline,
+        analysisMethod: 'deterministic',
+        providerFallback: true,
+        providerError: msg,
+        scoreExplanation: `Deterministic analysis fallback. Scan API error: ${msg}`,
+      };
+      setApiScanResult(fallbackResult);
+      return fallbackResult;
+    } finally {
+      setIsScanning(false);
+    }
+  }, [inputText, currentPolicy, getAuthHeaders]);
+
+  const saveScan = useCallback(async (
+    resultToSave: ScanResult,
+    content: string,
+    policyId?: string
+  ): Promise<string> => {
+    const targetPolicyId = policyId || currentPolicyId;
+    const now = new Date().toISOString();
+
+    if (storageMode === 'supabase') {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          text: content,
+          policy: policies[targetPolicyId] || currentPolicy,
+          enableAi: resultToSave.analysisMethod === 'contextual_ai',
+          persist: true,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Failed to save scan record (${res.status})`);
+      }
+
+      const data = await res.json();
+      await refreshData();
+      return data.scanId || `scn-${Date.now().toString().slice(-6)}`;
+    } else {
+      const newScanId = `scn-${Date.now().toString().slice(-6)}`;
+      const newRecord: PersistentScanRecord = {
+        id: newScanId,
+        policyId: targetPolicyId,
+        content,
+        score: resultToSave.overallScore,
+        status: resultToSave.status,
+        analysisMethod: resultToSave.analysisMethod,
+        summary: resultToSave.summary,
+        categories: resultToSave.categories,
+        userId: currentUser.id,
+        createdAt: now,
+        violationsCount: resultToSave.violations?.length || 0,
+        violations: resultToSave.violations,
+        aiRewrittenText: resultToSave.aiRewrittenText,
+      };
+
+      setPersistentScans((prev) => [newRecord, ...prev]);
+
+      const auditItem: AuditEvent = {
+        id: `aud-scan-${Date.now()}`,
+        eventType: 'scan_executed',
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        targetId: newScanId,
+        details: `Saved ${resultToSave.analysisMethod} compliance scan record (Safety Score: ${resultToSave.overallScore}/100, Violations: ${resultToSave.violations?.length || 0}).`,
+        timestamp: now,
+      };
+      setAuditEvents((prev) => [auditItem, ...prev]);
+
+      return newScanId;
+    }
+  }, [storageMode, currentPolicyId, policies, currentPolicy, currentUser, getAuthHeaders, refreshData]);
 
   const updatePolicy = useCallback(async (updated: BrandPolicy) => {
     if (storageMode === 'supabase') {
@@ -553,9 +746,15 @@ export const BrandGuardProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         updateThreatStatus,
         addThreat,
         scanResult,
+        isScanning,
+        scanError,
+        runScan,
+        saveScan,
+        resetDemoData,
         isAuditModalOpen,
         setIsAuditModalOpen,
         storageMode,
+        isSupabaseConnected: storageMode === 'supabase',
         isLoadingData,
         dataError,
         refreshData,

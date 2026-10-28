@@ -17,6 +17,9 @@ export const RISK_STYLE: Record<RiskLevel, { text: string; bg: string; bar: stri
   Low: { text: "text-low", bg: "bg-low/10", bar: "bg-low" },
 };
 
-export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+export function formatDate(iso?: string): string {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }

@@ -5,8 +5,10 @@ import {
   createOrUpdateSubmission,
 } from '@/lib/workflowStore';
 import { verifyServerSession, isAuthError } from '@/lib/authServer';
+import { markDynamic } from '@/lib/dynamicRoute';
 
 export async function GET(req: NextRequest) {
+  await markDynamic();
   try {
     // 1. Enforce Server-Side Authentication
     const authResult = await verifyServerSession(req);

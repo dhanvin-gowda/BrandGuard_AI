@@ -2,9 +2,10 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ScanSearch } from "lucide-react";
-import { activities, REFERENCE_DATE, scans } from "@/lib/mock-data";
 import { computeMetrics, needsAttention } from "@/lib/metrics";
 import { RISK_ORDER } from "@/lib/risk";
+import { useBrandGuard } from "@/context/BrandGuardContext";
+import { persistentScanToUiScan } from "@/lib/scanStore";
 import PageHeader from "./PageHeader";
 import MetricCard from "./MetricCard";
 import RiskDistribution from "./RiskDistribution";
@@ -13,19 +14,45 @@ import FindingItem from "./FindingItem";
 import ActivityList from "./ActivityList";
 import RiskBadge from "./RiskBadge";
 
-const RANGES = [{ label: "Last 7 days", days: 7 }, { label: "Last 30 days", days: 30 }, { label: "All demo data", days: 0 }];
+const RANGES = [
+  { label: "All records", days: 0 },
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+];
 
 export default function DashboardView() {
-  const [days, setDays] = useState(0);
+  const [filter, setFilter] = useState<{ days: number; cutoff: number }>({ days: 0, cutoff: 0 });
+  const { persistentScans, auditEvents } = useBrandGuard();
+
+  // Combine live persistentScans mapped to Scan format (empty by default until user executes scans)
+  const allScans = useMemo(() => {
+    if (persistentScans && persistentScans.length > 0) {
+      return persistentScans.map(persistentScanToUiScan);
+    }
+    return [];
+  }, [persistentScans]);
+
   const inRange = useMemo(() => {
-    if (!days) return scans;
-    const cutoff = new Date(REFERENCE_DATE).getTime() - days * 86400000;
-    return scans.filter((s) => new Date(s.date).getTime() >= cutoff);
-  }, [days]);
+    if (!filter.days || !filter.cutoff) return allScans;
+    return allScans.filter((s) => new Date(s.date).getTime() >= filter.cutoff);
+  }, [filter, allScans]);
+
   const m = useMemo(() => computeMetrics(inRange), [inRange]);
   const attention = useMemo(() => needsAttention(inRange), [inRange]);
   const recent = [...inRange].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   const empty = m.totalScans === 0;
+
+  // Live activities derived strictly from actual audit events
+  const liveActivities = useMemo(() => {
+    if (auditEvents && auditEvents.length > 0) {
+      return auditEvents.slice(0, 6).map((evt) => ({
+        id: evt.id,
+        text: `${evt.actorName}: ${evt.details}`,
+        date: evt.timestamp ? evt.timestamp.slice(0, 10) : 'Today',
+      }));
+    }
+    return [];
+  }, [auditEvents]);
 
   return (
     <>
@@ -35,18 +62,28 @@ export default function DashboardView() {
         actions={
           <>
             <label className="sr-only" htmlFor="range">Date range</label>
-            <select id="range" value={days} onChange={(e) => setDays(Number(e.target.value))}
-              className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg">
+            <select
+              id="range"
+              value={filter.days}
+              onChange={(e) => {
+                const d = Number(e.target.value);
+                setFilter({ days: d, cutoff: d > 0 ? Date.now() - d * 86400000 : 0 });
+              }}
+              className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg"
+            >
               {RANGES.map((r) => <option key={r.days} value={r.days}>{r.label}</option>)}
             </select>
-            <Link href="/scanner" className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+            <Link
+              href="/scanner"
+              className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
               <ScanSearch size={16} aria-hidden /> Scan New Content
             </Link>
           </>
         }
       />
       <p className="mb-4 rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted">
-        Demo data. These figures come from sample records, not live scans.
+        Active compliance ledger. Metrics reflect persisted scans, policy evaluations, and audit events.
       </p>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -54,8 +91,11 @@ export default function DashboardView() {
           {!empty && <RiskBadge level={m.scoreLevel} />}
         </MetricCard>
         <MetricCard label="Total Posts Scanned" value={m.totalScans} detail="Completed scans in this period" />
-        <MetricCard label="Risks Detected" value={m.totalFindings}
-          detail={RISK_ORDER.map((k) => `${m.findingsBySeverity[k]} ${k.toLowerCase()}`).join(" · ")} />
+        <MetricCard
+          label="Risks Detected"
+          value={m.totalFindings}
+          detail={RISK_ORDER.map((k) => `${m.findingsBySeverity[k]} ${k.toLowerCase()}`).join(" · ")}
+        />
         <MetricCard label="High-Risk Content" value={m.highRiskCount} detail="Scans scoring below 70 (High or Critical)" />
       </div>
 
@@ -77,7 +117,7 @@ export default function DashboardView() {
         <RecentScansTable scans={recent} emptyHref="/scanner" />
       </section>
 
-      <div className="mt-6"><ActivityList items={activities} /></div>
+      <div className="mt-6"><ActivityList items={liveActivities} /></div>
     </>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import {
   ClipboardCheck,
   CheckCircle,
@@ -215,7 +216,12 @@ export default function ApprovalsView() {
           </div>
 
           <div className="space-y-2.5">
-            {filteredSubmissions.map((sub) => {
+            {filteredSubmissions.length === 0 ? (
+              <div className="p-4 rounded-xl border border-dashed border-white/10 text-center text-xs text-slate-400">
+                No submissions in this filter.
+              </div>
+            ) : (
+              filteredSubmissions.map((sub) => {
               const isSelected = selectedSubmission?.id === sub.id;
               const policyName = policies[sub.policyId]?.name || sub.policyId;
 
@@ -251,7 +257,8 @@ export default function ApprovalsView() {
                   </div>
                 </div>
               );
-            })}
+            })
+          )}
           </div>
         </div>
 
@@ -449,8 +456,12 @@ export default function ApprovalsView() {
               </div>
             </div>
           ) : (
-            <div className="glass-panel rounded-2xl p-12 text-center text-slate-400">
-              Select a submission from the queue to view details and review.
+            <div className="glass-panel rounded-2xl p-12 text-center text-slate-400 space-y-3">
+              <ClipboardCheck className="w-8 h-8 text-slate-600 mx-auto" />
+              <p>No submission selected or queue is empty.</p>
+              <Link href="/scanner" className="inline-block text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline">
+                Scan content to submit for review &rarr;
+              </Link>
             </div>
           )}
         </div>

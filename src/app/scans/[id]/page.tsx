@@ -1,18 +1,25 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-import DashboardLayout from "@/components/DashboardLayout";
-import RiskBadge from "@/components/RiskBadge";
-import { getScan, scans } from "@/lib/mock-data";
-import { formatDate, levelFromScore } from "@/lib/risk";
+'use client';
 
-export function generateStaticParams() {
-  return scans.map((s) => ({ id: s.id }));
-}
+import { use, useMemo } from 'react';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { ArrowLeft } from 'lucide-react';
+import DashboardLayout from '@/components/DashboardLayout';
+import RiskBadge from '@/components/RiskBadge';
+import { formatDate, levelFromScore } from '@/lib/risk';
+import { useBrandGuard } from '@/context/BrandGuardContext';
+import { getScan, persistentScanToUiScan } from '@/lib/scanStore';
 
-export default async function ScanDetail({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const scan = getScan(id);
+export default function ScanDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const { persistentScans } = useBrandGuard();
+
+  const scan = useMemo(() => {
+    const fromContext = persistentScans.find((s) => s.id === id);
+    if (fromContext) return persistentScanToUiScan(fromContext);
+    return getScan(id);
+  }, [id, persistentScans]);
+
   if (!scan) notFound();
 
   return (
@@ -23,7 +30,7 @@ export default async function ScanDetail({ params }: { params: Promise<{ id: str
       <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{scan.title}</h1>
-          <p className="mt-1 text-sm text-muted">{scan.platform} · Scanned {formatDate(scan.date)} · Demo record</p>
+          <p className="mt-1 text-sm text-muted">{scan.platform} · Scanned {formatDate(scan.date)}</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-3xl font-semibold tabular-nums">{scan.score}<span className="ml-1 text-base font-normal text-muted">/ 100</span></span>

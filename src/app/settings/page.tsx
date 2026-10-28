@@ -1,9 +1,20 @@
 'use client';
 
+import { useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { Settings, Shield, Sliders, Key } from "lucide-react";
+import { Settings, Shield, Sliders, RotateCcw } from "lucide-react";
+import { useBrandGuard } from "@/context/BrandGuardContext";
 
 export default function SettingsPage() {
+  const { resetDemoData, isSupabaseConnected } = useBrandGuard();
+  const [resetDone, setResetDone] = useState(false);
+
+  const handleResetDemo = () => {
+    resetDemoData();
+    setResetDone(true);
+    setTimeout(() => setResetDone(false), 2500);
+  };
+
   return (
     <DashboardLayout>
       <div className="mb-6">
@@ -104,33 +115,36 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Integration Credentials - Honestly labeled */}
+        {/* Demo State & Persistence Management */}
         <div className="glass-card p-6 rounded-xl border border-white/10">
-          <h2 className="text-base font-semibold text-white mb-1 flex items-center gap-2">
-            <Key className="w-4 h-4 text-cyan-400" />
-            Telemetry & Social Webhook Connectors
-          </h2>
-          <p className="text-xs text-slate-400 mb-4">
-            Stream channels configured for Threat Radar demonstration.
-          </p>
-
-          <div className="space-y-3">
-            {[
-              { name: 'X / Twitter Stream API v2', status: 'Sandbox Simulated (No external token configured)', ping: 'Local Heuristic' },
-              { name: 'Domain Registrar WHOIS Feed', status: 'Sandbox Simulated (Local mock probe)', ping: 'Local Heuristic' },
-              { name: 'Ad Network Heuristic Ingestion', status: 'Sandbox Simulated (Local mock probe)', ping: 'Local Heuristic' },
-            ].map((feed) => (
-              <div key={feed.name} className="flex items-center justify-between p-3 rounded-lg bg-slate-900/40 border border-white/5 text-xs">
-                <div>
-                  <div className="font-semibold text-slate-200">{feed.name}</div>
-                  <div className="text-[11px] text-amber-400 flex items-center gap-1.5 mt-0.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                    {feed.status}
-                  </div>
-                </div>
-                <span className="font-mono text-slate-500 text-[11px]">{feed.ping}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-white mb-1 flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-amber-400" />
+                Demo State & Sandbox Controls
+              </h2>
+              <p className="text-xs text-slate-400 max-w-xl">
+                Reset local demo scans, reviews, and test policies back to clean defaults for a fresh live demonstration.
+                Does not affect remote Supabase production data.
+              </p>
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className="text-slate-500">Active Storage:</span>
+                <span className={`px-2 py-0.5 rounded font-mono text-[11px] ${isSupabaseConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
+                  {isSupabaseConnected ? 'Supabase Connected' : 'Demo LocalStorage Sandbox'}
+                </span>
               </div>
-            ))}
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={handleResetDemo}
+                className="px-4 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-2 transition-all hover:scale-[1.02] cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                {resetDone ? 'Reset Successful!' : 'Reset Demo Sandbox'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

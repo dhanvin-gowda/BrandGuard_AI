@@ -16,6 +16,10 @@ export default function ScannerPage() {
     currentPolicyId,
     setCurrentPolicyId,
     createSubmission,
+    runScan,
+    saveScan,
+    isScanning,
+    scanError,
   } = useBrandGuard();
 
   return (
@@ -46,9 +50,17 @@ export default function ScannerPage() {
         currentPolicy={currentPolicy}
         presets={SAMPLE_PRESETS}
         scanResult={scanResult}
-        onScan={(text) => setInputText(text)}
+        onScan={async (text, enableAi) => {
+          setInputText(text);
+          await runScan(text, currentPolicy, { enableAi });
+        }}
+        onSaveScan={async (text) => {
+          await saveScan(scanResult, text, currentPolicyId);
+        }}
         inputText={inputText}
         setInputText={setInputText}
+        isScanning={isScanning}
+        scanError={scanError}
         onOpenAudit={() => setIsAuditModalOpen(true)}
         onSubmitForReview={async (text, title) => {
           await createSubmission(title || 'Campaign Copy from Scanner', text, currentPolicyId);

@@ -57,6 +57,11 @@ export interface ScanResult {
   violations: Violation[];
   aiRewrittenText?: string;
   originalText?: string;
+  aiReasoning?: string;
+  aiModelUsed?: string;
+  scoreExplanation?: string;
+  providerFallback?: boolean;
+  providerError?: string;
 }
 
 export interface BrandPolicy {

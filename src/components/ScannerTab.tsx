@@ -22,6 +22,7 @@ import {
   Send,
   HelpCircle,
   Cpu,
+  BookmarkCheck,
 } from 'lucide-react';
 import { BrandPolicy, PresetSample, ScanResult, Violation } from '../types/brandguard';
 import { applyViolationFix } from '@/lib/brandSafetyEngine';
@@ -31,11 +32,14 @@ interface ScannerTabProps {
   currentPolicy: BrandPolicy;
   presets: PresetSample[];
   scanResult: ScanResult;
-  onScan: (text: string) => void;
+  onScan: (text: string, enableAi?: boolean) => Promise<void> | void;
+  onSaveScan?: (text: string) => Promise<string | void>;
   inputText: string;
   setInputText: (text: string) => void;
   onOpenAudit: () => void;
   onSubmitForReview?: (text: string, title?: string) => void;
+  isScanning?: boolean;
+  scanError?: string | null;
 }
 
 export const ScannerTab: React.FC<ScannerTabProps> = ({
@@ -43,20 +47,51 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   presets,
   scanResult,
   onScan,
+  onSaveScan,
   inputText,
   setInputText,
   onOpenAudit,
   onSubmitForReview,
+  isScanning = false,
+  scanError = null,
 }) => {
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all');
   const [activeView, setActiveView] = useState<'violations' | 'annotated' | 'remediation' | 'compare'>('violations');
   const [copiedOriginal, setCopiedOriginal] = useState(false);
   const [copiedFixed, setCopiedFixed] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [enableAiAnalysis, setEnableAiAnalysis] = useState(true);
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [rejectedFindingIds, setRejectedFindingIds] = useState<Set<string>>(new Set());
   const [originalBaselineText, setOriginalBaselineText] = useState<string>(inputText);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+
+  const isBusy = isAnalyzing || isScanning;
+
+  const handleSaveScan = async () => {
+    if (isTextEmpty || !onSaveScan || isSaving) return;
+    setIsSaving(true);
+    try {
+      await onSaveScan(inputText);
+      setSaveSuccessMessage('Saved to History!');
+      setTimeout(() => setSaveSuccessMessage(null), 3500);
+    } catch (err) {
+      console.error('Failed to save scan:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const triggerAnalysis = async (textToScan: string, withAi: boolean = enableAiAnalysis) => {
+    setIsAnalyzing(true);
+    try {
+      await onScan(textToScan, withAi);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleSelectPreset = (preset: PresetSample) => {
     setOriginalBaselineText(preset.text);
@@ -64,14 +99,6 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
     setRejectedFindingIds(new Set());
     setInputText(preset.text);
     triggerAnalysis(preset.text);
-  };
-
-  const triggerAnalysis = (textToScan: string) => {
-    setIsAnalyzing(true);
-    setTimeout(() => {
-      onScan(textToScan);
-      setIsAnalyzing(false);
-    }, 350);
   };
 
   // Accept a suggested correction
@@ -187,16 +214,28 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
       <div className="glass-panel rounded-2xl p-5 border border-white/10">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
                 Active Policy: {currentPolicy.name}
               </span>
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
               <span className="text-xs text-slate-400">{currentPolicy.industry}</span>
-              <span className="ml-2 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-slate-300">
-                <Cpu className="w-3 h-3 text-cyan-400" />
-                {scanResult.analysisMethod === 'contextual_ai' ? 'AI Augmented' : 'Deterministic Sentinel'}
-              </span>
+              {scanResult.analysisMethod === 'contextual_ai' ? (
+                <span className="ml-1 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-purple-300">
+                  <Sparkles className="w-3 h-3 text-purple-400" />
+                  Contextual AI ({scanResult.aiModelUsed || 'Gemini/OpenAI'})
+                </span>
+              ) : scanResult.providerFallback ? (
+                <span className="ml-1 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                  <AlertTriangle className="w-3 h-3 text-amber-400" />
+                  Deterministic Sentinel (AI Fallback)
+                </span>
+              ) : (
+                <span className="ml-1 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-slate-300">
+                  <Cpu className="w-3 h-3 text-cyan-400" />
+                  Deterministic Sentinel
+                </span>
+              )}
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight mt-1">
               AI Content Safety & Compliance Scanner
@@ -225,6 +264,24 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Fallback Notice Banner if AI provider is unavailable */}
+      {(scanResult.providerFallback || scanError) && (
+        <div className="glass-panel rounded-xl p-3.5 border border-amber-500/30 bg-amber-950/20 flex items-start gap-3">
+          <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+          <div className="flex-1 text-xs">
+            <span className="font-semibold text-amber-300">
+              Deterministic Sentinel Active:
+            </span>{' '}
+            <span className="text-slate-300">
+              {scanResult.providerError || scanError || 'AI contextual engine is unconfigured or unreachable.'}
+            </span>
+            <p className="text-slate-400 mt-1 text-[11px]">
+              Deterministic policy rules (prohibited terms, competitor exclusions, tone thresholds, required disclaimers) remain active and validated.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Main Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -258,14 +315,16 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 className="w-full h-full min-h-[220px] p-3.5 bg-slate-950/60 rounded-xl border border-white/10 text-slate-100 text-sm leading-relaxed placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-y"
               />
 
-              {isAnalyzing && (
+              {isBusy && (
                 <div
                   className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center gap-3 z-10"
                   aria-busy="true"
                 >
                   <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                   <span className="text-sm font-medium text-indigo-300 animate-pulse">
-                    Evaluating Rules & Statutory Standards...
+                    {enableAiAnalysis
+                      ? 'Performing AI Contextual & Regulatory Scan...'
+                      : 'Evaluating Deterministic Rules & Statutory Standards...'}
                   </span>
                 </div>
               )}
@@ -306,12 +365,42 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 </button>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2.5">
+                {/* Contextual AI Toggle */}
+                <label
+                  htmlFor="enable-ai-toggle"
+                  className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 select-none px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:border-white/20 transition-all"
+                  title="Toggle server-side contextual LLM analysis"
+                >
+                  <input
+                    type="checkbox"
+                    id="enable-ai-toggle"
+                    checked={enableAiAnalysis}
+                    onChange={(e) => setEnableAiAnalysis(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded bg-slate-900 border-white/20 text-indigo-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <Sparkles className={`w-3.5 h-3.5 ${enableAiAnalysis ? 'text-indigo-400' : 'text-slate-500'}`} />
+                  <span className="font-medium">Contextual AI</span>
+                </label>
+
+                {onSaveScan && (
+                  <button
+                    id="save-scan-btn"
+                    onClick={handleSaveScan}
+                    disabled={isTextEmpty || isBusy || isSaving}
+                    className="px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-slate-200 hover:text-white border border-white/10 transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Save current scan results to persistent history"
+                  >
+                    <BookmarkCheck className="w-3.5 h-3.5 text-cyan-400" />
+                    {saveSuccessMessage ? saveSuccessMessage : 'Save Scan'}
+                  </button>
+                )}
+
                 {onSubmitForReview && (
                   <button
                     id="submit-review-btn"
                     onClick={handleSubmit}
-                    disabled={isTextEmpty || isAnalyzing}
+                    disabled={isTextEmpty || isBusy}
                     className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/40 transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Send className="w-3.5 h-3.5" />
@@ -321,7 +410,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <button
                   id="trigger-scan-btn"
                   onClick={() => triggerAnalysis(inputText)}
-                  disabled={isAnalyzing || isTextEmpty}
+                  disabled={isBusy || isTextEmpty}
                   className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white shadow-lg shadow-indigo-500/25 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01] active:scale-[0.99]"
                 >
                   <Sparkles className="w-4 h-4 text-cyan-200" />
@@ -408,6 +497,27 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 </div>
               ))}
             </div>
+
+            {/* Score Calculation Rationale */}
+            {!isTextEmpty && scanResult.scoreExplanation && (
+              <div className="mt-3.5 p-3 rounded-xl bg-slate-900/60 border border-white/5 text-xs text-slate-300">
+                <span className="font-semibold text-slate-200 block mb-0.5">
+                  Score Calculation Rationale:
+                </span>
+                <p className="text-slate-400 leading-relaxed text-[11px]">{scanResult.scoreExplanation}</p>
+              </div>
+            )}
+
+            {/* AI Governance Reasoning */}
+            {!isTextEmpty && scanResult.aiReasoning && (
+              <div className="mt-3 p-3 rounded-xl bg-purple-950/20 border border-purple-500/20 text-xs text-slate-300">
+                <div className="flex items-center gap-1.5 font-semibold text-purple-300 mb-1">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  Contextual AI Risk Assessment:
+                </div>
+                <p className="text-slate-300 leading-relaxed text-[11px]">{scanResult.aiReasoning}</p>
+              </div>
+            )}
 
             {/* Audit Trigger */}
             <button

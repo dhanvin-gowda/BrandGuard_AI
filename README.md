@@ -167,21 +167,47 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 # Server-only credentials (NEVER expose to the browser!)
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
-# Optional LLM Key for contextual analysis
-GEMINI_API_KEY=your-gemini-key
-OPENAI_API_KEY=your-openai-key
+# AI Provider Configuration (Server-Side Only)
+# Google Gemini (Primary / Recommended)
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-1.5-flash  # optional: defaults to gemini-1.5-flash (or gemini-2.5-flash)
+
+# OpenAI (Alternative / Supported)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini      # optional: defaults to gpt-4o-mini
 ```
 
-#### Demo Storage Mode (Zero-Config / Offline):
-When `NEXT_PUBLIC_SUPABASE_URL` is omitted or contains placeholder values (`your-project-id`), BrandGuard AI automatically activates **Demo Storage Mode**:
-- Uses isolated local state and `localStorage` caching in the browser.
-- Simulates Creator and Reviewer roles with pre-seeded demo submissions and guidelines.
-- Production API endpoints reject unauthenticated requests with `401 Unauthorized`.
-- Does not silently fall back to insecure memory in production; production mode requires valid database connectivity.
+> [!SECURITY]
+> **Zero Client Exposure**: AI credentials are read strictly on the server (`src/lib/aiSafetyEngine.ts` and `src/app/api/scan/route.ts`). Never prefix AI keys with `NEXT_PUBLIC_*`.
 
 ---
 
-### 3. Database Migrations & RLS Setup (If Using Supabase)
+### 3. Contextual AI vs. Deterministic Sentinel Architecture
+
+BrandGuard AI implements a hybrid dual-engine pipeline:
+
+1. **Deterministic Rule Ground Truth**:
+   - Executes first as the immutable baseline.
+   - Evaluates explicit prohibited lexicons, restricted claims, competitor mentions, tone sliders, and mandatory regulatory disclaimers.
+   - **Precedence Guarantee**: AI findings cannot dismiss or downgrade confirmed deterministic critical violations.
+2. **Contextual LLM Analysis (Gemini / OpenAI)**:
+   - Evaluates subtle nuances in LinkedIn and promotional copy:
+     - Unsupported factual and performance claims.
+     - Superlative, exaggerated, or absolute promises (*"completely guaranteed"*, *"market leader"*).
+     - Implicit or disparaging competitor comparisons.
+     - Tone deviations and colloquialisms undermining executive authority.
+     - Missing material qualifications or disclaimers.
+   - Generates an executive summary, risk reasoning, and a complete safer revision of the post.
+3. **Server-Side Coordinate & Evidence Verification**:
+   - Model-quoted substrings are validated server-side using `findEvidenceIndices()`.
+   - Start and end character offsets are verified against the original copy; hallucinated quotes without source text matches are filtered out to prevent UI coordinate corruption.
+4. **Transparent Telemetry & Fallback**:
+   - If AI credentials are missing, or if the provider times out / errors, BrandGuard AI seamlessly falls back to deterministic rule results.
+   - **Honest Labeling**: Fallback results are labeled as `deterministic` with clear diagnostics, and never falsely presented as AI-powered.
+
+---
+
+### 4. Database Migrations & RLS Setup (If Using Supabase)
 
 In your Supabase project dashboard, open the **SQL Editor** and run the migration scripts in sequential order:
 
@@ -207,7 +233,7 @@ In your Supabase project dashboard, open the **SQL Editor** and run the migratio
 
 ---
 
-### 4. Run the Development Server
+### 5. Run the Development Server
 ```powershell
 pnpm dev
 ```
@@ -215,26 +241,40 @@ Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
 ---
 
-### 5. Run Automated Tests
+### 6. Run Automated Tests
 ```powershell
 pnpm test
 ```
-Executes the comprehensive Vitest suite (67 tests across 4 suites):
+Executes the comprehensive Vitest suite (**88 tests across 5 test suites**):
+- **`aiSafetyEngine.test.ts` (21 tests)**:
+  1. Valid AI response parsing and schema validation.
+  2. Malformed JSON and code fence sanitization.
+  3. Provider timeout (`AbortController`) and HTTP 500 error handling.
+  4. Missing credentials detection and fallback.
+  5. Deterministic hard-rule violation preservation.
+  6. Overlapping violation deduplication.
+  7. Server-side text coordinate and evidence matching.
+  8. Risk-score bounds ([0, 100]) and severity mapping.
+  9. Honest API route fallback behavior.
+  10. Security: 10,000-character input limits, sliding window rate-limiting (30 req/min), and 401 token authentication.
 - **`brandSafetyEngine.test.ts` (18 tests)**: Boundary regex safety, special character handling, forbidden claims, tone sliders, disclaimers, and empty text scoring.
 - **`security.test.ts` (22 tests)**: Server authentication (401), role barriers (403), impersonation rejection, separation of duties, IDOR isolation, and audit immutability (405).
 - **`persistence.test.ts` (17 tests)**: Supabase submission persistence, revision versioning, review recording, atomic status rollback on partial failure, duplicate review prevention, and policy/scan storage.
 - **`workflow.test.ts` (10 tests)**: Creator-reviewer state transitions, audit event generation, and database error resilience.
 
+> [!NOTE]
+> All automated tests mock external provider HTTP calls. Running the test suite consumes **zero paid API tokens** and requires no active internet access.
+
 ---
 
-### 6. Run Linter
+### 7. Run Linter
 ```powershell
 pnpm lint
 ```
 
 ---
 
-### 7. Production Build
+### 8. Production Build
 ```powershell
 pnpm build
 pnpm start
@@ -259,6 +299,14 @@ $$\text{Score} = (\text{Legal} \times 0.35) + (\text{Claims} \times 0.25) + (\te
   - `review_required`: Any Warning violation or Overall Score `< 85`.
   - `approved` (Checks Passed): Zero Critical/Warning violations and Score `≥ 85`.
 - **Human Approval Rule**: Content score alone never marks workflow approval; an authorized human reviewer decision is mandatory.
+
+---
+
+## ⚠️ Known Limitations & Boundaries
+
+1. **Third-Party Rate Limits**: High-frequency bulk scanning may encounter upstream LLM provider rate limits (e.g., 15 RPM on free-tier Gemini API). BrandGuard AI includes client-side debouncing and sliding-window rate limiting (30 requests/min).
+2. **Contextual Scope**: The AI contextual evaluator inspects social copy up to 10,000 characters per request. Long multi-page documents should be analyzed section by section.
+3. **Legal Qualification**: BrandGuard AI is an automated compliance risk detector, not a licensed legal counsel. All high-stakes regulatory decisions must be confirmed by an authorized human compliance reviewer.
 
 ---
 

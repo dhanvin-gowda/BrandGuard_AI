@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPersistentScans } from '@/lib/scanStore';
 import { verifyServerSession, isAuthError } from '@/lib/authServer';
+import { markDynamic } from '@/lib/dynamicRoute';
 
 export async function GET(req: NextRequest) {
+  await markDynamic();
   try {
     let currentUser = undefined;
     if (req.headers.get('authorization')) {

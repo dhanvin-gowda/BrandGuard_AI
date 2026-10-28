@@ -1,11 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeBrandContent } from '@/lib/brandSafetyEngine';
+import { executeBrandScan, MAX_CONTENT_LENGTH } from '@/lib/aiSafetyEngine';
 import { BrandPolicy } from '@/types/brandguard';
 import { persistScanResult } from '@/lib/scanStore';
 import { verifyServerSession, isAuthError } from '@/lib/authServer';
+import { checkRateLimit } from '@/lib/rateLimiter';
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Rate limiting
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '127.0.0.1';
+    let actor = undefined;
+
+    // Optional user authentication for scan provenance
+    if (req.headers.get('authorization')) {
+      const authResult = await verifyServerSession(req);
+      if (isAuthError(authResult)) {
+        return NextResponse.json(
+          { error: authResult.error },
+          { status: authResult.status }
+        );
+      }
+      actor = authResult.user;
+    }
+
+    const rateKey = actor?.id ? `user:${actor.id}` : `ip:${ip}`;
+    const rateCheck = checkRateLimit(rateKey, 30, 60000);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Maximum 30 scans per minute allowed.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(Math.ceil(rateCheck.resetMs / 1000)),
+          },
+        }
+      );
+    }
+
+    // 2. Payload validation
     const body = await req.json().catch(() => null);
 
     if (!body || typeof body.text !== 'string' || !body.policy) {
@@ -17,36 +50,30 @@ export async function POST(req: NextRequest) {
 
     const text = body.text;
     const policy = body.policy as BrandPolicy;
-    const enableAi = Boolean(body.enableAi);
+    const enableAi = body.enableAi !== false; // default true if not specified
     const shouldPersist = Boolean(body.persist);
 
-    // Optional user authentication for scan provenance
-    let actor = undefined;
-    if (req.headers.get('authorization')) {
-      const authResult = await verifyServerSession(req);
-      if (!isAuthError(authResult)) {
-        actor = authResult.user;
-      }
+    // Enforce reasonable input size limit
+    if (text.length > MAX_CONTENT_LENGTH) {
+      return NextResponse.json(
+        {
+          error: `Content exceeds maximum allowed length of ${MAX_CONTENT_LENGTH} characters. Provided: ${text.length} characters.`,
+        },
+        { status: 400 }
+      );
     }
 
-    // 1. Always run deterministic heuristic analysis as the rock-solid ground truth
+    // 3. Deterministic heuristic analysis as the rock-solid ground truth
     const deterministicResult = analyzeBrandContent(text, policy);
 
-    let finalResult = deterministicResult;
+    // 4. Augment with contextual LLM analysis if enabled
+    const executionResult = await executeBrandScan(text, policy, deterministicResult, {
+      enableAi,
+    });
 
-    // 2. If AI key is configured and AI analysis is requested, augment with contextual findings
-    const geminiKey = process.env.GEMINI_API_KEY;
-    const openAiKey = process.env.OPENAI_API_KEY;
+    const finalResult = executionResult.scanResult;
 
-    if (enableAi && (geminiKey || openAiKey) && text.trim().length > 0) {
-      finalResult = {
-        ...deterministicResult,
-        analysisMethod: 'contextual_ai',
-        summary: `${deterministicResult.summary} (Augmented with server-side contextual analysis).`,
-      };
-    }
-
-    // 3. Persist to database if requested or if authenticated and text is non-empty
+    // 5. Persist to database if requested or if authenticated and text is non-empty
     let scanId: string | undefined = undefined;
     if (shouldPersist && text.trim().length > 0) {
       scanId = await persistScanResult(finalResult, text, policy.id, actor);
@@ -55,6 +82,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ...finalResult,
       scanId,
+      usedModel: executionResult.usedModel,
+      isFallback: executionResult.isFallback,
+      fallbackReason: executionResult.fallbackReason,
     });
   } catch (error) {
     console.error('Scan API error:', error);

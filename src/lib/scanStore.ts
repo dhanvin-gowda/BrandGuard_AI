@@ -1,4 +1,5 @@
-import { ScanResult, UserProfile } from '@/types/brandguard';
+import { ScanResult, UserProfile, Violation } from '@/types/brandguard';
+import { Finding, Scan } from '@/types';
 import { getServerSupabaseClient, isServerSupabaseConfigured } from './supabaseServer';
 
 export interface PersistentScanRecord {
@@ -13,16 +14,58 @@ export interface PersistentScanRecord {
   userId?: string;
   createdAt: string;
   violationsCount: number;
+  violations?: Violation[];
+  aiRewrittenText?: string;
 }
 
-let inMemoryScans: PersistentScanRecord[] = [];
+export const INITIAL_PERSISTENT_SCANS: PersistentScanRecord[] = [];
+
+let inMemoryScans: PersistentScanRecord[] = [...INITIAL_PERSISTENT_SCANS];
 
 export function resetScanStoreForTesting() {
-  inMemoryScans = [];
+  inMemoryScans = [...INITIAL_PERSISTENT_SCANS];
+}
+
+export function getInMemoryScanById(id: string): PersistentScanRecord | undefined {
+  return inMemoryScans.find((s) => s.id === id);
 }
 
 /**
- * Persists a completed scan result to Supabase (content_scans & scan_violations).
+ * Maps a PersistentScanRecord into the UI-compatible Scan structure.
+ */
+export function getScan(id: string): Scan | undefined {
+  const dynamicScan = getInMemoryScanById(id);
+  if (dynamicScan) return persistentScanToUiScan(dynamicScan);
+  return undefined;
+}
+
+export function persistentScanToUiScan(s: PersistentScanRecord): Scan {
+  const findings: Finding[] = (s.violations || []).map((v) => ({
+    id: v.id,
+    title: v.title,
+    severity: v.severity === 'critical' ? 'Critical' : v.severity === 'warning' ? 'High' : 'Low',
+    explanation: v.explanation,
+    excerpt: v.phrase,
+  }));
+
+  const suggestions: string[] = s.aiRewrittenText
+    ? [s.aiRewrittenText]
+    : (s.violations || []).map((v) => v.suggestedFix).filter(Boolean);
+
+  return {
+    id: s.id,
+    title: s.summary || `Scan ${s.id}`,
+    platform: (s.policyId === 'fintech' ? 'Paid Ads / Web' : s.policyId === 'consumer' ? 'Social / Creator' : s.policyId === 'healthcare' ? 'Marketing Brief' : 'Enterprise PR Wire'),
+    date: s.createdAt ? s.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10),
+    score: s.score,
+    content: s.content,
+    findings,
+    suggestions: suggestions.length > 0 ? suggestions : ['No changes required.'],
+  };
+}
+
+/**
+ * Persists a completed scan result to Supabase (content_scans & scan_violations) or in-memory fallback.
  */
 export async function persistScanResult(
   scanResult: ScanResult,
@@ -108,6 +151,8 @@ export async function persistScanResult(
     userId: user?.id,
     createdAt: now,
     violationsCount: scanResult.violations?.length || 0,
+    violations: scanResult.violations,
+    aiRewrittenText: scanResult.aiRewrittenText,
   };
   inMemoryScans.unshift(record);
 
@@ -117,15 +162,25 @@ export async function persistScanResult(
 /**
  * Retrieves persisted scan history for a user or reviewer.
  */
-export async function getPersistentScans(currentUser?: UserProfile): Promise<PersistentScanRecord[]> {
+export async function getPersistentScans(
+  currentUserOrLimit?: UserProfile | number,
+  maybeLimit?: number
+): Promise<PersistentScanRecord[]> {
+  const currentUser = typeof currentUserOrLimit === 'object' && currentUserOrLimit !== null ? currentUserOrLimit : undefined;
+  const limit = typeof currentUserOrLimit === 'number'
+    ? currentUserOrLimit
+    : typeof maybeLimit === 'number'
+    ? maybeLimit
+    : 50;
+
   const supabase = getServerSupabaseClient();
   if (isServerSupabaseConfigured && supabase) {
     try {
       let query = supabase
         .from('content_scans')
-        .select('*, scan_violations(count)')
+        .select('*, scan_violations(*)')
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(limit);
 
       // Scoped access: creators only see their own scans
       if (currentUser && currentUser.role === 'creator') {
@@ -137,7 +192,7 @@ export async function getPersistentScans(currentUser?: UserProfile): Promise<Per
         throw new Error(`Database error fetching scans: ${error.message}`);
       }
 
-      if (data) {
+      if (data && data.length > 0) {
         return data.map((d) => ({
           id: d.id,
           policyId: d.policy_id,
@@ -150,6 +205,21 @@ export async function getPersistentScans(currentUser?: UserProfile): Promise<Per
           userId: d.user_id,
           createdAt: d.created_at,
           violationsCount: Array.isArray(d.scan_violations) ? d.scan_violations.length : 0,
+          violations: Array.isArray(d.scan_violations)
+            ? d.scan_violations.map((v: Record<string, unknown>) => ({
+                id: String(v.id || `v-${v.start_index}`),
+                category: v.category as Violation['category'],
+                severity: v.severity as Violation['severity'],
+                phrase: String(v.phrase || ''),
+                startIndex: Number(v.start_index || 0),
+                endIndex: Number(v.end_index || 0),
+                title: String(v.title || ''),
+                explanation: String(v.explanation || ''),
+                suggestedFix: String(v.suggested_fix || ''),
+                ruleViolated: String(v.rule_violated || ''),
+                analysisMethod: 'deterministic',
+              }))
+            : [],
         }));
       }
     } catch (err) {
@@ -160,7 +230,7 @@ export async function getPersistentScans(currentUser?: UserProfile): Promise<Per
 
   let scans = inMemoryScans;
   if (currentUser && currentUser.role === 'creator') {
-    scans = scans.filter((s) => s.userId === currentUser.id);
+    scans = scans.filter((s) => !s.userId || s.userId === currentUser.id);
   }
-  return JSON.parse(JSON.stringify(scans));
+  return JSON.parse(JSON.stringify(scans.slice(0, limit)));
 }
